@@ -220,7 +220,7 @@ async def generate_speech(request: GenerateSpeechRequest):
     ffmpeg_args = None
 
     # Use piper for tts-1, and if xtts_device == none use for tts-1-hd as well.
-    if model == 'tts-1' or (args.xtts_device == 'none' and model != 'tts-1-camb'):
+    if model == 'tts-1' or (args.xtts_device == 'none' and model not in ('mars-flash', 'mars-pro')):
         voice_map = map_voice_to_speaker(voice, 'tts-1')
         try:
             piper_model = voice_map['model']
@@ -405,16 +405,16 @@ async def generate_speech(request: GenerateSpeechRequest):
 
         return StreamingResponse(content=ffmpeg_proc.stdout, media_type=media_type, background=BackgroundTask(cleanup))
 
-    # Use Camb AI for tts-1-camb
+    # Use Camb AI for mars-flash / mars-pro
     # Camb AI uses numeric voice IDs directly — no name-to-ID mapping needed.
-    elif model == 'tts-1-camb':
+    elif model in ('mars-flash', 'mars-pro'):
         try:
             voice_id = int(voice)
         except (ValueError, TypeError):
-            raise BadRequestError(f"tts-1-camb requires a numeric voice_id, got: '{voice}'", param='voice')
+            raise BadRequestError(f"{model} requires a numeric voice_id, got: '{voice}'", param='voice')
 
         language = 'en-us'
-        speech_model = 'mars-flash'
+        speech_model = model
 
         camb_api_key = os.environ.get('CAMB_API_KEY')
         if not camb_api_key:
@@ -478,7 +478,7 @@ async def generate_speech(request: GenerateSpeechRequest):
         return StreamingResponse(content=ffmpeg_proc.stdout, media_type=media_type, background=BackgroundTask(cleanup))
 
     else:
-        raise BadRequestError("No such model, must be tts-1, tts-1-hd, or tts-1-camb.", param='model')
+        raise BadRequestError("No such model, must be tts-1, tts-1-hd, mars-flash, or mars-pro.", param='model')
 
 
 # We return 'mps' but currently XTTS will not work with mps devices as the cuda support is incomplete
@@ -525,6 +525,7 @@ if __name__ == "__main__":
 
     app.register_model('tts-1')
     app.register_model('tts-1-hd')
-    app.register_model('tts-1-camb')
+    app.register_model('mars-flash')
+    app.register_model('mars-pro')
 
     uvicorn.run(app, host=args.host, port=args.port)

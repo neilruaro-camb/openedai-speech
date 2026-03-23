@@ -21,7 +21,7 @@ An OpenAI API compatible text to speech server.
 Full Compatibility:
 * `tts-1`: `alloy`, `echo`, `fable`, `onyx`, `nova`, and `shimmer` (configurable)
 * `tts-1-hd`:  `alloy`, `echo`, `fable`, `onyx`, `nova`, and `shimmer` (configurable, uses OpenAI samples by default)
-* `tts-1-camb`: uses numeric [Camb AI](https://camb.ai) voice IDs directly (cloud-based, streaming API)
+* `mars-flash` / `mars-pro`: uses numeric [Camb AI](https://camb.ai) voice IDs directly (cloud-based, streaming API)
 * response_format: `mp3`, `opus`, `aac`, `flac`, `wav` and `pcm`
 * speed 0.25-4.0 (and more)
 
@@ -34,7 +34,7 @@ Details:
   * [Custom fine-tuned XTTS model support](#custom-fine-tuned-model-support)
   * Configurable [generation parameters](#generation-parameters)
   * Streamed output while generating
-* Model `tts-1-camb` via [Camb AI](https://camb.ai) streaming TTS API (cloud-based, requires API key)
+* Model `mars-flash` / `mars-pro` via [Camb AI](https://camb.ai) streaming TTS API (cloud-based, requires API key)
   * Requires `CAMB_API_KEY` environment variable
   * Pass Camb AI voice IDs directly as the `voice` parameter (no name mapping needed)
   * Streamed output via Camb AI `/tts-stream` endpoint
@@ -426,7 +426,7 @@ tts-1-hd:
 
 ## Camb AI
 
-To use the `tts-1-camb` model, you need a [Camb AI](https://camb.ai) API key.
+To use the `mars-flash` or `mars-pro` models, you need a [Camb AI](https://camb.ai) API key.
 
 1. Set the `CAMB_API_KEY` environment variable (add it to `speech.env` or export it):
 ```bash
@@ -437,7 +437,7 @@ export CAMB_API_KEY=your-api-key-here
 ```bash
 curl http://localhost:8000/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -d '{"model":"tts-1-camb","input":"Hello world","voice":"147320"}' \
+  -d '{"model":"mars-flash","input":"Hello world","voice":"147320"}' \
   --output test.mp3
 ```
 
