@@ -1,6 +1,8 @@
 #!/bin/bash
 
+set -a
 [ -f speech.env ] && . speech.env
+set +a
 
 echo "First startup may download 2GB of speech models. Please wait."
 

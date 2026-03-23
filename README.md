@@ -21,6 +21,7 @@ An OpenAI API compatible text to speech server.
 Full Compatibility:
 * `tts-1`: `alloy`, `echo`, `fable`, `onyx`, `nova`, and `shimmer` (configurable)
 * `tts-1-hd`:  `alloy`, `echo`, `fable`, `onyx`, `nova`, and `shimmer` (configurable, uses OpenAI samples by default)
+* `tts-1-camb`: uses numeric [Camb AI](https://camb.ai) voice IDs directly (cloud-based, streaming API)
 * response_format: `mp3`, `opus`, `aac`, `flac`, `wav` and `pcm`
 * speed 0.25-4.0 (and more)
 
@@ -33,6 +34,10 @@ Details:
   * [Custom fine-tuned XTTS model support](#custom-fine-tuned-model-support)
   * Configurable [generation parameters](#generation-parameters)
   * Streamed output while generating
+* Model `tts-1-camb` via [Camb AI](https://camb.ai) streaming TTS API (cloud-based, requires API key)
+  * Requires `CAMB_API_KEY` environment variable
+  * Pass Camb AI voice IDs directly as the `voice` parameter (no name mapping needed)
+  * Streamed output via Camb AI `/tts-stream` endpoint
 * Occasionally, certain words or symbols may sound incorrect, you can fix them with regex via `pre_process_map.yaml`
 * Tested with python 3.9-3.11, piper does not install on python 3.12 yet
 
@@ -418,6 +423,25 @@ tts-1-hd:
     model_path: voices/halo
 ```
 3) The model will be loaded when you access the voice for the first time (`--preload` doesn't work with custom models yet)
+
+## Camb AI
+
+To use the `tts-1-camb` model, you need a [Camb AI](https://camb.ai) API key.
+
+1. Set the `CAMB_API_KEY` environment variable (add it to `speech.env` or export it):
+```bash
+export CAMB_API_KEY=your-api-key-here
+```
+
+2. Use the model by passing a Camb AI voice ID directly as the `voice` parameter:
+```bash
+curl http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"tts-1-camb","input":"Hello world","voice":"147320"}' \
+  --output test.mp3
+```
+
+Voice IDs are numeric identifiers from your Camb AI account. No `voice_to_speaker.yaml` configuration is needed for this model.
 
 ## Generation Parameters
 

@@ -12,7 +12,10 @@ import time
 import yaml
 import json
 
+import requests as http_requests
+
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from loguru import logger
 from openedai import OpenAIStub, BadRequestError, ServiceUnavailableError
 from pydantic import BaseModel
@@ -88,6 +91,7 @@ class xtts_wrapper():
     def tts(self, text, language, audio_path, **hf_generate_kwargs):
         with torch.no_grad():
             self.last_used = time.time()
+            start_time = self.last_used
             tokens = 0
             try:
                 with self.lock:
@@ -107,7 +111,8 @@ class xtts_wrapper():
                 pass
 
             finally:
-                logger.debug(f"Generated {tokens} tokens in {time.time() - self.last_used:.2f}s @ {tokens / (time.time() - self.last_used):.2f} T/s")
+                elapsed = time.time() - start_time
+                logger.debug(f"Generated {tokens} tokens in {elapsed:.2f}s @ {tokens / elapsed:.2f} T/s" if elapsed > 0 else f"Generated {tokens} tokens")
                 self.last_used = time.time()
 
 def default_exists(filename: str):
@@ -207,13 +212,15 @@ async def generate_speech(request: GenerateSpeechRequest):
             media_type = "audio/pcm;rate=22050"
         elif model == 'tts-1-hd': # xtts
             media_type = "audio/pcm;rate=24000"
+        elif model == 'tts-1-camb':
+            media_type = "audio/pcm;rate=24000"
     else:
         raise BadRequestError(f"Invalid response_format: '{response_format}'", param='response_format')
 
     ffmpeg_args = None
 
-    # Use piper for tts-1, and if xtts_device == none use for all models.
-    if model == 'tts-1' or args.xtts_device == 'none':
+    # Use piper for tts-1, and if xtts_device == none use for tts-1-hd as well.
+    if model == 'tts-1' or (args.xtts_device == 'none' and model != 'tts-1-camb'):
         voice_map = map_voice_to_speaker(voice, 'tts-1')
         try:
             piper_model = voice_map['model']
@@ -247,7 +254,11 @@ async def generate_speech(request: GenerateSpeechRequest):
         ffmpeg_args.extend(["-"])
         ffmpeg_proc = subprocess.Popen(ffmpeg_args, stdin=tts_proc.stdout, stdout=subprocess.PIPE)
 
-        return StreamingResponse(content=ffmpeg_proc.stdout, media_type=media_type)
+        def cleanup():
+            tts_proc.kill()
+            ffmpeg_proc.kill()
+
+        return StreamingResponse(content=ffmpeg_proc.stdout, media_type=media_type, background=BackgroundTask(cleanup))
     # Use xtts for tts-1-hd
     elif model == 'tts-1-hd':
         voice_map = map_voice_to_speaker(voice, 'tts-1-hd')
@@ -392,9 +403,82 @@ async def generate_speech(request: GenerateSpeechRequest):
             del generator_worker
             del out_writer_worker
 
-        return StreamingResponse(content=ffmpeg_proc.stdout, media_type=media_type, background=cleanup)
+        return StreamingResponse(content=ffmpeg_proc.stdout, media_type=media_type, background=BackgroundTask(cleanup))
+
+    # Use Camb AI for tts-1-camb
+    # Camb AI uses numeric voice IDs directly — no name-to-ID mapping needed.
+    elif model == 'tts-1-camb':
+        try:
+            voice_id = int(voice)
+        except (ValueError, TypeError):
+            raise BadRequestError(f"tts-1-camb requires a numeric voice_id, got: '{voice}'", param='voice')
+
+        language = 'en-us'
+        speech_model = 'mars-flash'
+
+        camb_api_key = os.environ.get('CAMB_API_KEY')
+        if not camb_api_key:
+            raise ServiceUnavailableError("CAMB_API_KEY environment variable is not set.")
+
+        camb_payload = {
+            "text": input_text,
+            "voice_id": voice_id,
+            "language": language,
+            "speech_model": speech_model,
+            "output_configuration": {
+                "format": "wav",
+            },
+        }
+
+        logger.debug(f"Camb AI TTS request: voice_id={voice_id}, language={language}, model={speech_model}")
+
+        camb_response = http_requests.post(
+            "https://client.camb.ai/apis/tts-stream",
+            json=camb_payload,
+            headers={
+                "x-api-key": camb_api_key,
+            },
+            stream=True,
+        )
+
+        logger.info(f"Camb AI API response: status={camb_response.status_code}, content-type={camb_response.headers.get('content-type')}, content-length={camb_response.headers.get('content-length', 'chunked')}")
+
+        if camb_response.status_code != 200:
+            error_text = camb_response.text[:200]
+            camb_response.close()
+            raise ServiceUnavailableError(f"Camb AI API error: {camb_response.status_code} {error_text}")
+
+        ffmpeg_args = build_ffmpeg_args(response_format, input_format="WAV", sample_rate="24000")
+        ffmpeg_args.extend(["-"])
+
+        ffmpeg_proc = subprocess.Popen(ffmpeg_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+        def camb_writer():
+            bytes_written = 0
+            try:
+                for chunk in camb_response.iter_content(chunk_size=4096):
+                    if chunk:
+                        ffmpeg_proc.stdin.write(chunk)
+                        bytes_written += len(chunk)
+            except BrokenPipeError:
+                logger.info("Client disconnected during Camb AI streaming")
+            except Exception as e:
+                logger.error(f"Camb AI writer error: {repr(e)}")
+            finally:
+                logger.info(f"Camb AI writer: {bytes_written} bytes written to ffmpeg")
+                ffmpeg_proc.stdin.close()
+
+        writer_thread = threading.Thread(target=camb_writer, daemon=True)
+        writer_thread.start()
+
+        def cleanup():
+            ffmpeg_proc.kill()
+            camb_response.close()
+
+        return StreamingResponse(content=ffmpeg_proc.stdout, media_type=media_type, background=BackgroundTask(cleanup))
+
     else:
-        raise BadRequestError("No such model, must be tts-1 or tts-1-hd.", param='model')
+        raise BadRequestError("No such model, must be tts-1, tts-1-hd, or tts-1-camb.", param='model')
 
 
 # We return 'mps' but currently XTTS will not work with mps devices as the cuda support is incomplete
@@ -441,5 +525,6 @@ if __name__ == "__main__":
 
     app.register_model('tts-1')
     app.register_model('tts-1-hd')
+    app.register_model('tts-1-camb')
 
     uvicorn.run(app, host=args.host, port=args.port)
